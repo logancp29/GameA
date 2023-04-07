@@ -5,11 +5,16 @@
 #include <windows.h>
 #include <winbase.h>
 #pragma warning ( pop )
+
+#include <stdint.h>
 #include "Main.h"
 
 BOOL gGameIsRunning;
 HWND gGameWindow;
-GAMEBITMAP gDrawingSurface;
+GAMEBITMAP gBackBuffer;
+MONITORINFO gMonitorInfo = { sizeof(MONITORINFO) };
+int32_t gMonitorWidth;
+int32_t gMonitorHeight;
 
 int WinMain(HINSTANCE Instance, HINSTANCE PreviousInstance, PSTR CommandLine, INT CmdShow)
 {
@@ -30,24 +35,26 @@ int WinMain(HINSTANCE Instance, HINSTANCE PreviousInstance, PSTR CommandLine, IN
         goto Exit;
     }
 
-    gDrawingSurface.BitmapInfo.bmiHeader.biSize = sizeof(gDrawingSurface.BitmapInfo.bmiHeader);
+    gBackBuffer.BitmapInfo.bmiHeader.biSize = sizeof(gBackBuffer.BitmapInfo.bmiHeader);
 
-    gDrawingSurface.BitmapInfo.bmiHeader.biWidth = GAME_RES_WIDTH;     // Resolution is 384 by 216 pixels
+    gBackBuffer.BitmapInfo.bmiHeader.biWidth = GAME_RES_WIDTH;     // Resolution is 384 by 240 pixels
 
-    gDrawingSurface.BitmapInfo.bmiHeader.biHeight = GAME_RES_HEIGHT;
+    gBackBuffer.BitmapInfo.bmiHeader.biHeight = GAME_RES_HEIGHT;
 
-    gDrawingSurface.BitmapInfo.bmiHeader.biBitCount = GAME_BPP;
+    gBackBuffer.BitmapInfo.bmiHeader.biBitCount = GAME_BPP;
 
-    gDrawingSurface.BitmapInfo.bmiHeader.biCompression = BI_RGB;
+    gBackBuffer.BitmapInfo.bmiHeader.biCompression = BI_RGB;
 
-    gDrawingSurface.BitmapInfo.bmiHeader.biPlanes = 1;
+    gBackBuffer.BitmapInfo.bmiHeader.biPlanes = 1;
 
-    if ((gDrawingSurface.Memory = VirtualAlloc(NULL, GAME_DRAWING_AREA_MEMORY_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)) == NULL)
+    if ((gBackBuffer.Memory = VirtualAlloc(NULL, GAME_DRAWING_AREA_MEMORY_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)) == NULL)
     {
         MessageBoxA(NULL, "Failed to allocate memory for drawing surface!", "Error!", MB_ICONEXCLAMATION | MB_OK);
         
         goto Exit;
     }
+
+    memset(gBackBuffer.Memory, 0x7F, GAME_DRAWING_AREA_MEMORY_SIZE); // RGB is stored in the order BGRA in memory; A being alpha
 
     MSG Message = { 0 };        // { 0 } sets all data structure values to zero
 
@@ -117,12 +124,11 @@ DWORD CreateMainGameWindow(void)
 
     WindowClass.hCursor = LoadCursorA(NULL, IDC_ARROW);
 
-    WindowClass.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); //Handle to background brush
+    WindowClass.hbrBackground = CreateSolidBrush(RGB(255, 0, 255));     // Hidious Pink acts as debuff color
 
     WindowClass.lpszMenuName = NULL;
 
     WindowClass.lpszClassName = GAME_NAME "_WINDOWCLASS";
-
 
     if (RegisterClassExA(&WindowClass) == 0)                    //If it fails to register window class; returns 0
     {
@@ -144,6 +150,29 @@ DWORD CreateMainGameWindow(void)
         goto Exit;
     }
     
+    if ((GetMonitorInfoA(MonitorFromWindow(gGameWindow, MONITOR_DEFAULTTOPRIMARY), &gMonitorInfo)) == 0)    // Gets monitor info
+    {
+        Result = ERROR_MONITOR_NO_DESCRIPTOR;
+
+        goto Exit;
+    }
+
+    gMonitorWidth = gMonitorInfo.rcMonitor.right - gMonitorInfo.rcMonitor.left;
+    gMonitorHeight = gMonitorInfo.rcMonitor.bottom - gMonitorInfo.rcMonitor.top;
+
+    if ((SetWindowLongPtrA(gGameWindow, GWL_STYLE, (WS_OVERLAPPEDWINDOW | WS_VISIBLE) & ~WS_OVERLAPPEDWINDOW)) == 0)
+    {
+        Result = GetLastError();
+
+        goto Exit;
+    }
+
+    if (SetWindowPos(gGameWindow, HWND_TOP, gMonitorInfo.rcMonitor.left, gMonitorInfo.rcMonitor.top, gMonitorWidth, gMonitorHeight, SWP_NOOWNERZORDER | SWP_FRAMECHANGED) == 0)
+    {
+        Result = GetLastError();
+
+        goto Exit;
+    }
 
 Exit:
     return(Result);
@@ -166,7 +195,7 @@ BOOL GameIsAlreadyRunning(void)
 
 void ProcessPlayerInput(void)
 {
-    short EscapeKeyIsDown = GetAsyncKeyState(VK_ESCAPE);
+    int16_t EscapeKeyIsDown = GetAsyncKeyState(VK_ESCAPE);
 
     if (EscapeKeyIsDown)
     {
@@ -177,4 +206,21 @@ void ProcessPlayerInput(void)
 void RenderFrameGraphics(void)
 {
 
+    HDC DeviceContext = GetDC(gGameWindow);
+
+    StretchDIBits(DeviceContext,
+        0,
+        0,
+        gMonitorWidth,
+        gMonitorHeight,
+        0,
+        0,
+        GAME_RES_WIDTH,
+        GAME_RES_HEIGHT,
+        gBackBuffer.Memory,
+        &gBackBuffer.BitmapInfo,
+        DIB_RGB_COLORS,
+        SRCCOPY);
+
+    ReleaseDC(gGameWindow, DeviceContext);
 }
